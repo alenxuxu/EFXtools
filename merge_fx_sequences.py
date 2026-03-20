@@ -7,7 +7,7 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from PIL import Image, ImageColor
+from PIL import Image, ImageColor, ImageTk
 
 try:
     _tkdnd = importlib.import_module("tkinterdnd2")
@@ -154,6 +154,10 @@ def split_image_to_grid(
     rows,
     spacing=0,
     margin=0,
+    spacing_x=None,
+    spacing_y=None,
+    margin_x=None,
+    margin_y=None,
     cell_width=0,
     cell_height=0,
     prefix="frame",
@@ -162,11 +166,16 @@ def split_image_to_grid(
     if columns <= 0 or rows <= 0:
         raise ValueError("拆分模式下，列数和行数都必须 > 0")
 
+    sx = spacing if spacing_x is None else spacing_x
+    sy = spacing if spacing_y is None else spacing_y
+    mx = margin if margin_x is None else margin_x
+    my = margin if margin_y is None else margin_y
+
     with Image.open(input_path).convert("RGBA") as src:
         img_w, img_h = src.size
 
-        usable_w = img_w - margin * 2 - (columns - 1) * spacing
-        usable_h = img_h - margin * 2 - (rows - 1) * spacing
+        usable_w = img_w - mx * 2 - (columns - 1) * sx
+        usable_h = img_h - my * 2 - (rows - 1) * sy
         if usable_w <= 0 or usable_h <= 0:
             raise ValueError("边距/间距过大，导致无可拆分区域")
 
@@ -188,8 +197,8 @@ def split_image_to_grid(
                 )
             ch = usable_h // rows
 
-        need_w = margin * 2 + columns * cw + (columns - 1) * spacing
-        need_h = margin * 2 + rows * ch + (rows - 1) * spacing
+        need_w = mx * 2 + columns * cw + (columns - 1) * sx
+        need_h = my * 2 + rows * ch + (rows - 1) * sy
         if need_w > img_w or need_h > img_h:
             raise ValueError("网格尺寸超过原图范围，请减小格子宽高/边距/间距")
 
@@ -198,8 +207,8 @@ def split_image_to_grid(
         index = start_index
         for r in range(rows):
             for c in range(columns):
-                x = margin + c * (cw + spacing)
-                y = margin + r * (ch + spacing)
+                x = mx + c * (cw + sx)
+                y = my + r * (ch + sy)
                 piece = src.crop((x, y, x + cw, y + ch))
                 out_name = f"{prefix}_{index:04d}.png"
                 piece.save(os.path.join(output_dir, out_name))
@@ -410,11 +419,16 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         self.split_rows_var = tk.StringVar(value="4")
         self.split_spacing_var = tk.StringVar(value="0")
         self.split_margin_var = tk.StringVar(value="0")
+        self.split_spacing_x_var = tk.StringVar(value="0")
+        self.split_spacing_y_var = tk.StringVar(value="0")
+        self.split_margin_x_var = tk.StringVar(value="0")
+        self.split_margin_y_var = tk.StringVar(value="0")
         self.split_cell_w_var = tk.StringVar(value="0")
         self.split_cell_h_var = tk.StringVar(value="0")
         self.split_out_dir_var = tk.StringVar(value="output/splits")
         self.split_prefix_var = tk.StringVar(value="frame")
         self.split_start_index_var = tk.StringVar(value="1")
+        self.split_preview_image = None
 
         self.video_input_var = tk.StringVar(value="")
         self.video_out_dir_var = tk.StringVar(value="output/video_frames")
@@ -435,6 +449,21 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         self.convert_out_dir_var = tk.StringVar(value="output/converted")
 
         self._build_ui()
+
+        for var in (
+            self.split_input_var,
+            self.split_columns_var,
+            self.split_rows_var,
+            self.split_spacing_var,
+            self.split_margin_var,
+            self.split_spacing_x_var,
+            self.split_spacing_y_var,
+            self.split_margin_x_var,
+            self.split_margin_y_var,
+            self.split_cell_w_var,
+            self.split_cell_h_var,
+        ):
+            var.trace_add("write", self._on_split_params_change)
 
     def _build_ui(self):
         root = ttk.Frame(self, padding=12)
@@ -527,12 +556,31 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         grid.pack(fill="x", pady=10)
         self._labeled_entry(grid, "列数(>0)", self.split_columns_var, 0, 0)
         self._labeled_entry(grid, "行数(>0)", self.split_rows_var, 0, 1)
-        self._labeled_entry(grid, "间距(px)", self.split_spacing_var, 0, 2)
-        self._labeled_entry(grid, "外边距(px)", self.split_margin_var, 0, 3)
-        self._labeled_entry(grid, "格子宽(0=自动均分)", self.split_cell_w_var, 1, 0)
-        self._labeled_entry(grid, "格子高(0=自动均分)", self.split_cell_h_var, 1, 1)
-        self._labeled_entry(grid, "文件名前缀", self.split_prefix_var, 1, 2)
-        self._labeled_entry(grid, "起始编号", self.split_start_index_var, 1, 3)
+        self._labeled_entry(grid, "间距(统一,兼容)", self.split_spacing_var, 0, 2)
+        self._labeled_entry(grid, "外边距(统一,兼容)", self.split_margin_var, 0, 3)
+        self._labeled_entry(grid, "水平间距X(px)", self.split_spacing_x_var, 1, 0)
+        self._labeled_entry(grid, "垂直间距Y(px)", self.split_spacing_y_var, 1, 1)
+        self._labeled_entry(grid, "水平边距X(px)", self.split_margin_x_var, 1, 2)
+        self._labeled_entry(grid, "垂直边距Y(px)", self.split_margin_y_var, 1, 3)
+        self._labeled_entry(grid, "格子宽(0=自动均分)", self.split_cell_w_var, 2, 0)
+        self._labeled_entry(grid, "格子高(0=自动均分)", self.split_cell_h_var, 2, 1)
+        self._labeled_entry(grid, "文件名前缀", self.split_prefix_var, 2, 2)
+        self._labeled_entry(grid, "起始编号", self.split_start_index_var, 2, 3)
+
+        pre_btn_row = ttk.Frame(frm)
+        pre_btn_row.pack(fill="x", pady=(2, 6))
+        ttk.Button(
+            pre_btn_row, text="刷新网格预览", command=self.refresh_split_preview
+        ).pack(side="left")
+
+        self.split_preview_canvas = tk.Canvas(
+            frm,
+            height=240,
+            background="#1b1b1b",
+            highlightthickness=1,
+            highlightbackground="#3a3a3a",
+        )
+        self.split_preview_canvas.pack(fill="x", pady=(0, 8))
 
         out_row = ttk.Frame(frm)
         out_row.pack(fill="x", pady=(4, 10))
@@ -548,9 +596,10 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
 
         tips = (
             "说明: 拆分会按行优先导出，文件名形如 frame_0001.png。\n"
-            "若格子宽高为0，则按可用区域均分；不能整除时会报错提醒。"
+            "支持 X/Y 不同间距和边距；若格子宽高为0，则按可用区域均分；不能整除时会报错提醒。"
         )
         ttk.Label(frm, text=tips, foreground="#666666").pack(anchor="w", pady=(10, 0))
+        frm.after(50, self.refresh_split_preview)
 
     def _build_video_tab(self, frm):
         in_row = ttk.Frame(frm)
@@ -737,6 +786,7 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         p = paths[0]
         if os.path.isfile(p) and p.lower().endswith(".png"):
             self.split_input_var.set(p)
+            self.refresh_split_preview()
         else:
             messagebox.showwarning("提示", "拆分输入请拖入单个 PNG 文件")
 
@@ -798,6 +848,123 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
             return float(mode)
         return 0.0
 
+    def _on_split_params_change(self, *_):
+        self.after(50, self.refresh_split_preview)
+
+    def _get_split_params(self):
+        columns = self._to_int(self.split_columns_var.get().strip(), "列数")
+        rows = self._to_int(self.split_rows_var.get().strip(), "行数")
+        if columns <= 0 or rows <= 0:
+            raise ValueError("拆分模式下，列数和行数都必须 > 0")
+
+        spacing = self._to_int(self.split_spacing_var.get().strip(), "间距")
+        margin = self._to_int(self.split_margin_var.get().strip(), "外边距")
+        spacing_x = self._to_int(self.split_spacing_x_var.get().strip(), "水平间距X")
+        spacing_y = self._to_int(self.split_spacing_y_var.get().strip(), "垂直间距Y")
+        margin_x = self._to_int(self.split_margin_x_var.get().strip(), "水平边距X")
+        margin_y = self._to_int(self.split_margin_y_var.get().strip(), "垂直边距Y")
+        cell_w = self._to_int(self.split_cell_w_var.get().strip(), "格子宽")
+        cell_h = self._to_int(self.split_cell_h_var.get().strip(), "格子高")
+        start_index = self._to_int(self.split_start_index_var.get().strip(), "起始编号")
+
+        return {
+            "columns": columns,
+            "rows": rows,
+            "spacing": spacing,
+            "margin": margin,
+            "spacing_x": spacing_x,
+            "spacing_y": spacing_y,
+            "margin_x": margin_x,
+            "margin_y": margin_y,
+            "cell_w": cell_w,
+            "cell_h": cell_h,
+            "start_index": start_index,
+        }
+
+    def refresh_split_preview(self):
+        canvas = self.split_preview_canvas
+        canvas.delete("all")
+        input_path = self.split_input_var.get().strip()
+        if not input_path or not os.path.isfile(input_path):
+            canvas.create_text(
+                12,
+                12,
+                anchor="nw",
+                fill="#cfcfcf",
+                text="请选择要拆分的 PNG，然后点 刷新网格预览",
+            )
+            return
+
+        try:
+            p = self._get_split_params()
+            sx = p["spacing"] if p["spacing_x"] == 0 else p["spacing_x"]
+            sy = p["spacing"] if p["spacing_y"] == 0 else p["spacing_y"]
+            mx = p["margin"] if p["margin_x"] == 0 else p["margin_x"]
+            my = p["margin"] if p["margin_y"] == 0 else p["margin_y"]
+
+            with Image.open(input_path).convert("RGB") as src:
+                iw, ih = src.size
+                cw = max(10, int(canvas.winfo_width() or 700))
+                ch = max(10, int(canvas.winfo_height() or 240))
+                pad = 8
+                scale = min((cw - pad * 2) / iw, (ch - pad * 2) / ih)
+                scale = max(scale, 0.01)
+
+                pw = max(1, int(iw * scale))
+                ph = max(1, int(ih * scale))
+                preview = src.resize((pw, ph), Image.Resampling.BILINEAR)
+                self.split_preview_image = ImageTk.PhotoImage(preview)
+                ox = (cw - pw) // 2
+                oy = (ch - ph) // 2
+                canvas.create_image(ox, oy, image=self.split_preview_image, anchor="nw")
+
+                usable_w = iw - mx * 2 - (p["columns"] - 1) * sx
+                usable_h = ih - my * 2 - (p["rows"] - 1) * sy
+                if usable_w <= 0 or usable_h <= 0:
+                    raise ValueError("边距/间距过大")
+
+                if p["cell_w"] > 0:
+                    gw = p["cell_w"]
+                else:
+                    if usable_w % p["columns"] != 0:
+                        raise ValueError("宽度不能整除列数")
+                    gw = usable_w // p["columns"]
+
+                if p["cell_h"] > 0:
+                    gh = p["cell_h"]
+                else:
+                    if usable_h % p["rows"] != 0:
+                        raise ValueError("高度不能整除行数")
+                    gh = usable_h // p["rows"]
+
+                total_w = mx * 2 + p["columns"] * gw + (p["columns"] - 1) * sx
+                total_h = my * 2 + p["rows"] * gh + (p["rows"] - 1) * sy
+                if total_w > iw or total_h > ih:
+                    raise ValueError("网格超出图片范围")
+
+                l = ox + mx * scale
+                t = oy + my * scale
+                r = ox + (mx + p["columns"] * gw + (p["columns"] - 1) * sx) * scale
+                b = oy + (my + p["rows"] * gh + (p["rows"] - 1) * sy) * scale
+                canvas.create_rectangle(l, t, r, b, outline="#00ff66", width=2)
+
+                for c in range(1, p["columns"]):
+                    x = ox + (mx + c * gw + (c - 1) * sx) * scale
+                    canvas.create_line(x, t, x, b, fill="#00ff66", width=1)
+                for rr in range(1, p["rows"]):
+                    y = oy + (my + rr * gh + (rr - 1) * sy) * scale
+                    canvas.create_line(l, y, r, y, fill="#00ff66", width=1)
+
+                info = (
+                    f"预览 {p['columns']}x{p['rows']}  cell={gw}x{gh}  "
+                    f"space=({sx},{sy})  margin=({mx},{my})"
+                )
+                canvas.create_text(10, ch - 8, anchor="sw", fill="#e8e8e8", text=info)
+        except Exception as e:
+            canvas.create_text(
+                12, 12, anchor="nw", fill="#ff7a7a", text=f"预览参数错误: {e}"
+            )
+
     def refresh_list(self):
         self.listbox.delete(0, tk.END)
         for p in self.image_paths:
@@ -847,6 +1014,7 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         )
         if path:
             self.split_input_var.set(path)
+            self.refresh_split_preview()
 
     def pick_split_output_dir(self):
         path = filedialog.askdirectory(title="选择拆分输出文件夹")
@@ -942,18 +1110,11 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
             if not os.path.isfile(input_path):
                 raise ValueError("输入图片不存在")
 
-            columns = self._to_int(self.split_columns_var.get().strip(), "列数")
-            rows = self._to_int(self.split_rows_var.get().strip(), "行数")
-            if columns <= 0 or rows <= 0:
-                raise ValueError("拆分模式下，列数和行数都必须 > 0")
-
-            spacing = self._to_int(self.split_spacing_var.get().strip(), "间距")
-            margin = self._to_int(self.split_margin_var.get().strip(), "外边距")
-            cell_w = self._to_int(self.split_cell_w_var.get().strip(), "格子宽")
-            cell_h = self._to_int(self.split_cell_h_var.get().strip(), "格子高")
-            start_index = self._to_int(
-                self.split_start_index_var.get().strip(), "起始编号"
-            )
+            p = self._get_split_params()
+            sx = p["spacing"] if p["spacing_x"] == 0 else p["spacing_x"]
+            sy = p["spacing"] if p["spacing_y"] == 0 else p["spacing_y"]
+            mx = p["margin"] if p["margin_x"] == 0 else p["margin_x"]
+            my = p["margin"] if p["margin_y"] == 0 else p["margin_y"]
 
             out_dir = self.split_out_dir_var.get().strip()
             if not out_dir:
@@ -964,14 +1125,16 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
             count = split_image_to_grid(
                 input_path=input_path,
                 output_dir=out_dir,
-                columns=columns,
-                rows=rows,
-                spacing=spacing,
-                margin=margin,
-                cell_width=cell_w,
-                cell_height=cell_h,
+                columns=p["columns"],
+                rows=p["rows"],
+                spacing_x=sx,
+                spacing_y=sy,
+                margin_x=mx,
+                margin_y=my,
+                cell_width=p["cell_w"],
+                cell_height=p["cell_h"],
                 prefix=prefix,
-                start_index=start_index,
+                start_index=p["start_index"],
             )
             messagebox.showinfo("完成", f"拆分成功，共导出 {count} 张:\n{out_dir}")
         except Exception as e:
@@ -1079,6 +1242,30 @@ def build_arg_parser():
     )
     p.add_argument("--split-prefix", default="frame", help="拆分输出文件名前缀")
     p.add_argument("--split-start-index", type=int, default=1, help="拆分输出起始编号")
+    p.add_argument(
+        "--split-spacing-x",
+        type=int,
+        default=-1,
+        help="拆分水平间距，-1 表示沿用 --spacing",
+    )
+    p.add_argument(
+        "--split-spacing-y",
+        type=int,
+        default=-1,
+        help="拆分垂直间距，-1 表示沿用 --spacing",
+    )
+    p.add_argument(
+        "--split-margin-x",
+        type=int,
+        default=-1,
+        help="拆分水平边距，-1 表示沿用 --margin",
+    )
+    p.add_argument(
+        "--split-margin-y",
+        type=int,
+        default=-1,
+        help="拆分垂直边距，-1 表示沿用 --margin",
+    )
 
     p.add_argument("--video-input", help="视频抽帧模式输入视频路径")
     p.add_argument(
@@ -1141,6 +1328,18 @@ def main():
             rows=rows,
             spacing=max(args.spacing, 0),
             margin=max(args.margin, 0),
+            spacing_x=(
+                max(args.split_spacing_x, 0) if args.split_spacing_x >= 0 else None
+            ),
+            spacing_y=(
+                max(args.split_spacing_y, 0) if args.split_spacing_y >= 0 else None
+            ),
+            margin_x=(
+                max(args.split_margin_x, 0) if args.split_margin_x >= 0 else None
+            ),
+            margin_y=(
+                max(args.split_margin_y, 0) if args.split_margin_y >= 0 else None
+            ),
             cell_width=max(args.cell_width, 0),
             cell_height=max(args.cell_height, 0),
             prefix=args.split_prefix,

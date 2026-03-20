@@ -14,7 +14,7 @@
 - 合并：自定义间距、外边距、背景色
 - 合并：支持不等尺寸图片，自动居中到各自格子
 - 拆分：单图按指定行列网格导出序列图
-- 拆分：支持间距、外边距、格子宽高、文件名前缀和起始编号
+- 拆分：支持可视化网格预览、X/Y 独立间距与边距、格子宽高、文件名前缀和起始编号
 - 视频抽帧：支持目标帧率（源帧率/30/12）、步长抽帧、时间范围、输出格式、文件名前缀与起始编号
 - 批量改图：支持多图拖拽/文件夹导入，按目标宽高批量缩放并转换格式
 - 支持拖拽文件：多张图片（含文件夹）/单张拆分图/视频都可直接拖入对应输入框
@@ -81,6 +81,12 @@ python merge_fx_sequences.py --split-input "./sheet.png" --split-out-dir "./outp
 python merge_fx_sequences.py --split-input "./sheet.png" --split-out-dir "./output/splits" --columns 8 --rows 4 --spacing 2 --margin 4 --split-prefix "fx"
 ```
 
+拆分时单独设置 X/Y 间距和边距：
+
+```bash
+python merge_fx_sequences.py --split-input "./sheet.png" --split-out-dir "./output/splits" --columns 8 --rows 4 --split-spacing-x 2 --split-spacing-y 6 --split-margin-x 4 --split-margin-y 10
+```
+
 #### 视频转序列图
 
 导出整段视频为 PNG 序列图：
@@ -120,6 +126,7 @@ python merge_fx_sequences.py --video-input "./shot.mp4" --video-out-dir "./outpu
 
 - `columns` 和 `rows` 必须都大于 0
 - `cell-width=0`/`cell-height=0` 时，按可用区域均分
+- 支持 `spacing-x/spacing-y`、`margin-x/margin-y` 分别设置横向和纵向参数
 - 若无法整除，会提示你调整参数，避免切片错位
 
 ### 视频抽帧
@@ -148,6 +155,10 @@ python merge_fx_sequences.py --video-input "./shot.mp4" --video-out-dir "./outpu
   - `--split-out-dir` 拆分输出文件夹（默认 `output/splits`）
   - `--split-prefix` 输出文件名前缀（默认 `frame`）
   - `--split-start-index` 起始编号（默认 `1`）
+  - `--split-spacing-x` 拆分水平间距（默认 `-1`，沿用 `--spacing`）
+  - `--split-spacing-y` 拆分垂直间距（默认 `-1`，沿用 `--spacing`）
+  - `--split-margin-x` 拆分水平边距（默认 `-1`，沿用 `--margin`）
+  - `--split-margin-y` 拆分垂直边距（默认 `-1`，沿用 `--margin`）
 - 视频抽帧模式参数：
   - `--video-input` 输入视频路径
   - `--video-out-dir` 输出文件夹（默认 `output/video_frames`）
