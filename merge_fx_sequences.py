@@ -5,6 +5,7 @@ import math
 import os
 import re
 import tkinter as tk
+import uuid
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageColor, ImageTk
@@ -59,6 +60,16 @@ def list_images_from_folder(folder: str):
     for name in os.listdir(folder):
         p = os.path.join(folder, name)
         if is_supported_image_file(p):
+            files.append(p)
+    files.sort(key=lambda p: natural_key(os.path.basename(p)))
+    return files
+
+
+def list_files_from_folder(folder: str):
+    files = []
+    for name in os.listdir(folder):
+        p = os.path.join(folder, name)
+        if os.path.isfile(p):
             files.append(p)
     files.sort(key=lambda p: natural_key(os.path.basename(p)))
     return files
@@ -299,6 +310,80 @@ def batch_resize_convert_images(
     return written
 
 
+def build_rename_plan(
+    file_paths,
+    prefix="",
+    suffix="",
+    replace_from="",
+    replace_to="",
+    index_only=False,
+    start_index=1,
+    padding=4,
+):
+    if not file_paths:
+        raise ValueError("没有输入文件")
+    if start_index < 0:
+        raise ValueError("起始编号必须 >= 0")
+    if padding <= 0:
+        raise ValueError("编号位数必须 > 0")
+
+    existing = [p for p in file_paths if os.path.isfile(p)]
+    if not existing:
+        raise ValueError("没有有效文件")
+
+    plan = []
+    idx = start_index
+    for old_path in existing:
+        folder = os.path.dirname(old_path)
+        base = os.path.basename(old_path)
+        stem, ext = os.path.splitext(base)
+
+        if index_only:
+            new_stem = f"{prefix}{idx:0{padding}d}{suffix}"
+            idx += 1
+        else:
+            new_stem = stem
+            if replace_from:
+                new_stem = new_stem.replace(replace_from, replace_to)
+            new_stem = f"{prefix}{new_stem}{suffix}"
+
+        if not new_stem:
+            raise ValueError(f"重命名后文件名为空: {old_path}")
+
+        new_path = os.path.join(folder, f"{new_stem}{ext}")
+        plan.append((old_path, new_path))
+
+    all_targets = [new for _, new in plan]
+    if len(set(all_targets)) != len(all_targets):
+        raise ValueError("目标文件名冲突，请调整规则")
+
+    old_set = set(old for old, _ in plan)
+    for old, new in plan:
+        if old == new:
+            continue
+        if os.path.exists(new) and new not in old_set:
+            raise ValueError(f"目标文件已存在: {new}")
+
+    return plan
+
+
+def apply_rename_plan(plan):
+    changes = [(old, new) for old, new in plan if old != new]
+    if not changes:
+        return 0
+
+    tmp_map = []
+    for old, new in changes:
+        tmp = f"{old}.tmp_rename_{uuid.uuid4().hex}"
+        os.rename(old, tmp)
+        tmp_map.append((tmp, new))
+
+    for tmp, new in tmp_map:
+        os.rename(tmp, new)
+
+    return len(changes)
+
+
 def extract_video_to_sequence(
     input_path,
     output_dir,
@@ -398,7 +483,7 @@ def extract_video_to_sequence(
 class App(BaseTk):  # type: ignore[misc, valid-type]
     def __init__(self):
         super().__init__()
-        self.title("特效序列图工具（合并/拆分/视频抽帧/批量改图）")
+        self.title("特效序列图工具（合并/拆分/视频抽帧/批量改图/批量改名）")
         self.geometry("780x620")
         self.minsize(740, 580)
         self.dnd_bind_ok = False
@@ -448,6 +533,15 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         self.convert_quality_var = tk.StringVar(value="95")
         self.convert_out_dir_var = tk.StringVar(value="output/converted")
 
+        self.rename_paths = []
+        self.rename_prefix_var = tk.StringVar(value="")
+        self.rename_suffix_var = tk.StringVar(value="")
+        self.rename_find_var = tk.StringVar(value="")
+        self.rename_replace_var = tk.StringVar(value="")
+        self.rename_start_var = tk.StringVar(value="1")
+        self.rename_padding_var = tk.StringVar(value="4")
+        self.rename_index_only_var = tk.BooleanVar(value=False)
+
         self._build_ui()
 
         for var in (
@@ -476,18 +570,21 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         split_tab = ttk.Frame(note, padding=10)
         video_tab = ttk.Frame(note, padding=10)
         convert_tab = ttk.Frame(note, padding=10)
+        rename_tab = ttk.Frame(note, padding=10)
         note.add(merge_tab, text="合并多图")
         note.add(split_tab, text="单图拆分")
         note.add(video_tab, text="视频转序列图")
         note.add(convert_tab, text="批量改尺寸格式")
+        note.add(rename_tab, text="批量改名")
 
         self._build_merge_tab(merge_tab)
         self._build_split_tab(split_tab)
         self._build_video_tab(video_tab)
         self._build_convert_tab(convert_tab)
+        self._build_rename_tab(rename_tab)
 
         if HAS_DND and self.dnd_bind_ok:
-            drag_tip = "拖拽已启用: 可直接把图片/视频拖到对应输入区域。"
+            drag_tip = "拖拽已启用: 可直接把文件/图片/视频拖到对应输入区域。"
         elif HAS_DND and not self.dnd_bind_ok:
             drag_tip = (
                 "检测到 tkinterdnd2，但拖拽注册失败。可重启程序或重装 tkinterdnd2。"
@@ -724,6 +821,60 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         )
         ttk.Label(frm, text=tips, foreground="#666666").pack(anchor="w", pady=(10, 0))
 
+    def _build_rename_tab(self, frm):
+        btns = ttk.Frame(frm)
+        btns.pack(fill="x")
+
+        ttk.Button(btns, text="选择文件", command=self.pick_rename_files).pack(
+            side="left"
+        )
+        ttk.Button(btns, text="选择文件夹", command=self.pick_rename_folder).pack(
+            side="left", padx=8
+        )
+        ttk.Button(btns, text="清空列表", command=self.clear_rename_files).pack(
+            side="left"
+        )
+
+        self.rename_count_label = ttk.Label(btns, text="已选 0 个")
+        self.rename_count_label.pack(side="right")
+
+        ttk.Label(frm, text="待重命名文件（支持拖拽文件/文件夹）:").pack(
+            anchor="w", pady=(10, 4)
+        )
+        self.rename_listbox = tk.Listbox(frm, height=10)
+        self.rename_listbox.pack(fill="both", expand=True)
+        self._bind_drop_target(self.rename_listbox, self.on_drop_rename_files)
+
+        grid = ttk.Frame(frm)
+        grid.pack(fill="x", pady=10)
+        self._labeled_entry(grid, "前缀", self.rename_prefix_var, 0, 0)
+        self._labeled_entry(grid, "后缀", self.rename_suffix_var, 0, 1)
+        self._labeled_entry(grid, "查找", self.rename_find_var, 0, 2)
+        self._labeled_entry(grid, "替换", self.rename_replace_var, 0, 3)
+        self._labeled_entry(grid, "起始编号", self.rename_start_var, 1, 0)
+        self._labeled_entry(grid, "编号位数", self.rename_padding_var, 1, 1)
+
+        ttk.Checkbutton(
+            grid,
+            text="仅按序号命名（忽略原文件名）",
+            variable=self.rename_index_only_var,
+        ).grid(row=1, column=2, columnspan=2, sticky="w", padx=4, pady=10)
+
+        op_row = ttk.Frame(frm)
+        op_row.pack(fill="x", pady=(2, 6))
+        ttk.Button(op_row, text="预览改名", command=self.on_preview_rename).pack(
+            side="left"
+        )
+        ttk.Button(op_row, text="执行批量改名", command=self.on_apply_rename).pack(
+            side="left", padx=8
+        )
+
+        self.rename_preview = tk.Text(frm, height=8)
+        self.rename_preview.pack(fill="x")
+
+        tips = "说明: 默认保留扩展名；可查找替换并加前后缀；也可启用仅序号命名。"
+        ttk.Label(frm, text=tips, foreground="#666666").pack(anchor="w", pady=(10, 0))
+
     def _labeled_entry(self, parent, label, var, row, col):
         box = ttk.Frame(parent)
         box.grid(row=row, column=col, sticky="ew", padx=4, pady=4)
@@ -821,6 +972,27 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         merged.update(collected)
         self.convert_paths = sorted(merged, key=natural_key)
         self.refresh_convert_list()
+
+    def on_drop_rename_files(self, event):
+        paths = self._parse_drop_paths(getattr(event, "data", ""))
+        if not paths:
+            return
+
+        collected = []
+        for p in paths:
+            if os.path.isdir(p):
+                collected.extend(list_files_from_folder(p))
+            elif os.path.isfile(p):
+                collected.append(p)
+
+        if not collected:
+            messagebox.showwarning("提示", "请拖入文件或包含文件的文件夹")
+            return
+
+        merged = set(self.rename_paths)
+        merged.update(collected)
+        self.rename_paths = sorted(merged, key=natural_key)
+        self.refresh_rename_list()
 
     @staticmethod
     def _to_int(s, name):
@@ -977,6 +1149,12 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
             self.convert_listbox.insert(tk.END, p)
         self.convert_count_label.config(text=f"已选 {len(self.convert_paths)} 张")
 
+    def refresh_rename_list(self):
+        self.rename_listbox.delete(0, tk.END)
+        for p in self.rename_paths:
+            self.rename_listbox.insert(tk.END, p)
+        self.rename_count_label.config(text=f"已选 {len(self.rename_paths)} 个")
+
     def pick_files(self):
         files = filedialog.askopenfilenames(
             title="选择PNG文件",
@@ -1071,6 +1249,28 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
         path = filedialog.askdirectory(title="选择批量处理输出文件夹")
         if path:
             self.convert_out_dir_var.set(path)
+
+    def pick_rename_files(self):
+        files = filedialog.askopenfilenames(title="选择要批量重命名的文件")
+        if not files:
+            return
+        merged = set(self.rename_paths)
+        merged.update(files)
+        self.rename_paths = sorted(merged, key=natural_key)
+        self.refresh_rename_list()
+
+    def pick_rename_folder(self):
+        folder = filedialog.askdirectory(title="选择要批量重命名的文件夹")
+        if not folder:
+            return
+        merged = set(self.rename_paths)
+        merged.update(list_files_from_folder(folder))
+        self.rename_paths = sorted(merged, key=natural_key)
+        self.refresh_rename_list()
+
+    def clear_rename_files(self):
+        self.rename_paths = []
+        self.refresh_rename_list()
 
     def on_merge(self):
         try:
@@ -1213,6 +1413,59 @@ class App(BaseTk):  # type: ignore[misc, valid-type]
                 jpg_quality=quality,
             )
             messagebox.showinfo("完成", f"处理完成，共导出 {count} 张:\n{out_dir}")
+        except Exception as e:
+            messagebox.showerror("错误", str(e))
+
+    def _current_rename_plan(self):
+        start_index = self._to_int(self.rename_start_var.get().strip(), "起始编号")
+        padding = self._to_int(self.rename_padding_var.get().strip(), "编号位数")
+
+        return build_rename_plan(
+            file_paths=self.rename_paths,
+            prefix=(self.rename_prefix_var.get() or "").strip(),
+            suffix=(self.rename_suffix_var.get() or "").strip(),
+            replace_from=self.rename_find_var.get() or "",
+            replace_to=self.rename_replace_var.get() or "",
+            index_only=bool(self.rename_index_only_var.get()),
+            start_index=start_index,
+            padding=padding,
+        )
+
+    def on_preview_rename(self):
+        try:
+            if not self.rename_paths:
+                raise ValueError("请先选择至少一个文件")
+
+            plan = self._current_rename_plan()
+            self.rename_preview.delete("1.0", tk.END)
+
+            lines = []
+            for old, new in plan:
+                lines.append(f"{os.path.basename(old)}  ->  {os.path.basename(new)}")
+            self.rename_preview.insert("1.0", "\n".join(lines) if lines else "无变更")
+        except Exception as e:
+            messagebox.showerror("错误", str(e))
+
+    def on_apply_rename(self):
+        try:
+            if not self.rename_paths:
+                raise ValueError("请先选择至少一个文件")
+
+            plan = self._current_rename_plan()
+            changed = sum(1 for old, new in plan if old != new)
+            if changed == 0:
+                raise ValueError("没有可执行的改名（新旧文件名相同）")
+
+            if not messagebox.askyesno(
+                "确认", f"将重命名 {changed} 个文件，是否继续？"
+            ):
+                return
+
+            done = apply_rename_plan(plan)
+            self.rename_paths = sorted([new for _, new in plan], key=natural_key)
+            self.refresh_rename_list()
+            self.on_preview_rename()
+            messagebox.showinfo("完成", f"批量改名完成，共处理 {done} 个文件")
         except Exception as e:
             messagebox.showerror("错误", str(e))
 
